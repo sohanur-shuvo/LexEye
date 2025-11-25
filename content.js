@@ -131,6 +131,8 @@ async function startRecording() {
     console.log('[Meeting Recorder] Starting...');
 
     // Request screen + audio with high quality
+    // IMPORTANT: Use preferCurrentTab to capture the meeting tab's audio
+    // This captures BOTH meeting audio AND your voice as it goes through the meeting
     mediaStream = await navigator.mediaDevices.getDisplayMedia({
       video: {
         width: { ideal: 1920 },
@@ -143,22 +145,26 @@ async function startRecording() {
         autoGainControl: false,
         sampleRate: 48000,
         channelCount: 2
-      }
+      },
+      preferCurrentTab: true,  // Prefer capturing the current tab
+      selfBrowserSurface: "include"  // Include current tab in selection
     });
 
     console.log('[Meeting Recorder] Got display media');
 
-    // IMPORTANT: Request microphone audio
+    // IMPORTANT: Request microphone audio separately
+    // This is critical for capturing YOUR voice during the call
     let finalStream = mediaStream;
     let micCaptured = false;
 
-    // Always try to get microphone - this is critical for capturing user's voice
+    // Try to get microphone - even if already in use by the meeting
     try {
       console.log('[Meeting Recorder] Requesting microphone access...');
 
+      // Request microphone with settings that work alongside meeting apps
       micStream = await navigator.mediaDevices.getUserMedia({
         audio: {
-          echoCancellation: false,
+          echoCancellation: true,  // Changed: Prevent feedback loops
           noiseSuppression: false,
           autoGainControl: true,
           sampleRate: 48000,
@@ -209,16 +215,20 @@ async function startRecording() {
       console.error('[Meeting Recorder] ✗ Microphone FAILED:', micError.message);
 
       // Alert user that microphone failed
-      alert('⚠️ Microphone Access Required!\n\n' +
-            'Your voice will NOT be recorded.\n\n' +
-            'To record your voice:\n' +
-            '1. Click the microphone icon in your address bar\n' +
-            '2. Allow microphone access\n' +
-            '3. Reload the page\n' +
-            '4. Try recording again\n\n' +
-            'Recording will continue with meeting audio only.');
+      alert('⚠️ Microphone Access Issue\n\n' +
+            'Your voice may not be recorded separately.\n\n' +
+            'IMPORTANT: When selecting what to share:\n' +
+            '1. Choose the "Chrome Tab" option (not Entire Screen)\n' +
+            '2. Select the meeting tab\n' +
+            '3. CHECK the "Share tab audio" checkbox\n' +
+            '4. This will capture both meeting audio AND your voice\n\n' +
+            'If already recording:\n' +
+            '- Your voice should still be captured through tab audio\n' +
+            '- Make sure "Share tab audio" was checked\n\n' +
+            'Recording will continue...');
 
-      console.log('[Meeting Recorder] Recording WITHOUT microphone - user voice will not be captured');
+      console.log('[Meeting Recorder] Recording WITHOUT separate microphone');
+      console.log('[Meeting Recorder] User voice should still be captured via tab audio if "Share tab audio" was enabled');
     }
 
     // Setup recorder with high quality settings
