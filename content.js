@@ -157,23 +157,29 @@ async function startRecording() {
     let finalStream = mediaStream;
     let micCaptured = false;
 
-    // Try to get microphone - even if already in use by the meeting
+    // Try to get microphone - THIS IS CRITICAL for capturing YOUR voice
+    // The tab audio only captures OTHER participants, NOT you
     try {
-      console.log('[Meeting Recorder] Requesting microphone access...');
+      console.log('[Meeting Recorder] Requesting microphone access for YOUR voice...');
 
-      // Request microphone with settings that work alongside meeting apps
+      // Request microphone with settings optimized for simultaneous use
       micStream = await navigator.mediaDevices.getUserMedia({
         audio: {
-          echoCancellation: true,  // Changed: Prevent feedback loops
-          noiseSuppression: false,
-          autoGainControl: true,
+          echoCancellation: false,  // Don't filter out - we need raw audio
+          noiseSuppression: false,  // Keep all audio
+          autoGainControl: false,   // Manual control is better
           sampleRate: 48000,
-          channelCount: 2
+          channelCount: 2,
+          // These settings help with simultaneous access
+          googEchoCancellation: false,
+          googAutoGainControl: false,
+          googNoiseSuppression: false,
+          googHighpassFilter: false
         }
       });
 
       micCaptured = true;
-      console.log('[Meeting Recorder] ✓ Microphone captured successfully');
+      console.log('[Meeting Recorder] ✓ Microphone captured successfully - YOUR voice will be recorded!');
 
       // Mix system audio + microphone using Web Audio API with high quality
       audioContext = new AudioContext({ sampleRate: 48000 });
@@ -213,22 +219,27 @@ async function startRecording() {
       console.log('[Meeting Recorder] ✓ Audio mixed successfully (system + microphone)');
     } catch (micError) {
       console.error('[Meeting Recorder] ✗ Microphone FAILED:', micError.message);
+      console.error('[Meeting Recorder] Error details:', micError.name, micError.constraint);
 
-      // Alert user that microphone failed
-      alert('⚠️ Microphone Access Issue\n\n' +
-            'Your voice may not be recorded separately.\n\n' +
-            'IMPORTANT: When selecting what to share:\n' +
-            '1. Choose the "Chrome Tab" option (not Entire Screen)\n' +
-            '2. Select the meeting tab\n' +
-            '3. CHECK the "Share tab audio" checkbox\n' +
-            '4. This will capture both meeting audio AND your voice\n\n' +
-            'If already recording:\n' +
-            '- Your voice should still be captured through tab audio\n' +
-            '- Make sure "Share tab audio" was checked\n\n' +
-            'Recording will continue...');
+      // Alert user with realistic solutions
+      alert('⚠️ Cannot Access Microphone - YOUR VOICE WILL NOT BE RECORDED\n\n' +
+            '❌ Problem: Microphone is already in use by the meeting\n' +
+            '❌ Tab audio only records OTHER participants, NOT you\n\n' +
+            '✅ SOLUTIONS TO RECORD YOUR VOICE:\n\n' +
+            'Option 1: Start recording BEFORE joining the meeting\n' +
+            '  - This extension will capture your mic first\n' +
+            '  - Then join the meeting (mic access is shared)\n\n' +
+            'Option 2: Use system audio (Windows only)\n' +
+            '  - Select "Entire Screen" instead of tab\n' +
+            '  - Check "Share system audio"\n' +
+            '  - Enable "Listen to this device" in Windows sound settings\n\n' +
+            'Option 3: Grant Chrome mic permission\n' +
+            '  - Click the mic icon in address bar\n' +
+            '  - Allow microphone for this site\n' +
+            '  - Reload page and try again\n\n' +
+            'Recording will continue with meeting audio only...');
 
-      console.log('[Meeting Recorder] Recording WITHOUT separate microphone');
-      console.log('[Meeting Recorder] User voice should still be captured via tab audio if "Share tab audio" was enabled');
+      console.log('[Meeting Recorder] ⚠️ Recording WITHOUT your voice - only other participants will be captured');
     }
 
     // Setup recorder with high quality settings

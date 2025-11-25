@@ -10,12 +10,12 @@ class RecordingManager {
     async startRecording(tabId) {
       try {
         console.log('[Meeting Recorder] Starting recording for tab:', tabId);
-  
+
         // Send message to content script to start recording
         const response = await chrome.tabs.sendMessage(tabId, {
           type: 'START_RECORDING'
         });
-  
+
         if (response && response.success) {
           this.isRecording = true;
           this.currentTabId = tabId;

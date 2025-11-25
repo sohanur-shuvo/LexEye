@@ -52,25 +52,33 @@ The extension also works on Microsoft Edge (Chromium-based):
 
 ## Usage
 
-### Manual Recording
+### Manual Recording - IMPORTANT: Read This to Record Your Voice!
 
-1. Join a meeting on Teams, Meet, or Zoom
-2. Click the LexEye extension icon in your toolbar
-3. Click the **"Start Recording"** button
-4. **IMPORTANT - Recording Your Voice:** When the screen sharing dialog appears:
-   - Select **"Chrome Tab"** (recommended) NOT "Entire Screen"
-   - Choose your meeting tab from the list
-   - **CHECK the "Share tab audio" checkbox** at the bottom
-   - This is critical! Tab audio captures BOTH the meeting audio AND your voice
-5. (Optional) Grant microphone access if prompted for backup audio capture
-6. Click **"Stop Recording"** when finished
-7. Recording saves to Downloads as `recording-YYYY-MM-DD-HH-mm-ss.webm`
+**Critical:** Tab audio captures OTHER participants, NOT your voice. Here's how to record YOUR voice:
 
-**Why "Share tab audio" captures your voice:**
-- When you're in a meeting, your voice goes TO the meeting platform
-- The platform sends your voice back to you (as audio output)
-- "Share tab audio" captures everything the tab plays, including your voice
-- This is why it records BOTH other participants AND you!
+#### Method 1: Start Recording BEFORE Joining (Recommended)
+1. Open the meeting link (but don't join yet)
+2. Click the LexEye extension icon
+3. Click **"Start Recording"**
+4. Grant microphone access when prompted (MUST accept!)
+5. Select "Chrome Tab" + check "Share tab audio"
+6. NOW join the meeting
+7. Both your voice AND others will be recorded
+
+**Why this works:** The extension captures your mic first, then the meeting shares access.
+
+#### Method 2: If Already in Meeting (May Not Work)
+1. Browser might block mic access (already in use)
+2. Try anyway: Click "Start Recording"
+3. If mic permission fails, you'll only record OTHER people
+4. For best results, restart and use Method 1
+
+#### Method 3: System Audio (Windows Only)
+1. Windows Sound Settings → Recording → Stereo Mix → Enable → "Listen to this device"
+2. Click "Start Recording"
+3. Select **"Entire Screen"** (not tab)
+4. Check **"Share system audio"**
+5. This captures everything your speakers play, including your voice echo
 
 ### Auto-Recording Mode
 
@@ -167,13 +175,32 @@ Open `debug.html` in your browser for a debugging interface that shows:
 
 ## Troubleshooting
 
-### My voice is not being recorded
+### My voice is not being recorded (MOST COMMON ISSUE)
 
-**Solution:** Make sure you select "Chrome Tab" and CHECK "Share tab audio"
-- When starting recording, the screen sharing dialog has a checkbox at the bottom
-- This checkbox says "Share tab audio" or "Share audio"
-- **You MUST check this box** to record both meeting audio and your voice
-- If you chose "Entire Screen", switch to "Chrome Tab" instead
+**Root Cause:** Your microphone is already in use by the meeting, so the extension can't access it.
+
+**Solutions (in order of reliability):**
+
+1. **Start recording BEFORE joining the meeting** (Best method)
+   - Open meeting link but don't join
+   - Start recording and grant microphone permission
+   - Then join the meeting
+   - Both your mic and meeting audio will be captured
+
+2. **Check browser permissions**
+   - Go to `chrome://settings/content/microphone`
+   - Ensure Teams/Meet/Zoom is allowed
+   - Reload the page and try again
+
+3. **Use system audio capture (Windows)**
+   - Enable "Stereo Mix" in Windows sound settings
+   - Enable "Listen to this device" for your microphone
+   - Select "Entire Screen" + "Share system audio"
+   - Your voice echo will be captured
+
+4. **Last resort: Use meeting's built-in recording**
+   - Teams, Meet, and Zoom all have native recording
+   - This is more reliable for capturing all participants
 
 ### Recording doesn't start
 - Ensure you've granted screen sharing permission
