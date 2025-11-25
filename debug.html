@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Meeting Recorder Debug</title>
+    <style>
+        body {
+            font-family: monospace;
+            padding: 20px;
+            background: #1e1e1e;
+            color: #00ff00;
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        h1 {
+            color: #00ff00;
+        }
+        .section {
+            background: #2d2d2d;
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 5px;
+            border: 1px solid #00ff00;
+        }
+        button {
+            background: #00ff00;
+            color: #000;
+            border: none;
+            padding: 10px 20px;
+            margin: 5px;
+            cursor: pointer;
+            font-weight: bold;
+            border-radius: 3px;
+        }
+        button:hover {
+            background: #00cc00;
+        }
+        .status {
+            padding: 10px;
+            margin: 10px 0;
+            background: #000;
+            border-left: 3px solid #00ff00;
+        }
+        .error {
+            color: #ff0000;
+            border-left-color: #ff0000;
+        }
+        .success {
+            color: #00ff00;
+            border-left-color: #00ff00;
+        }
+        .info {
+            color: #ffff00;
+            border-left-color: #ffff00;
+        }
+        pre {
+            background: #000;
+            padding: 10px;
+            overflow-x: auto;
+            border: 1px solid #333;
+        }
+    </style>
+</head>
+<body>
+    <h1>🎥 Meeting Recorder - Debug Panel</h1>
+
+    <div class="section">
+        <h2>Extension Status</h2>
+        <button onclick="checkExtension()">Check Extension</button>
+        <div id="extensionStatus" class="status"></div>
+    </div>
+
+    <div class="section">
+        <h2>Auto-Record Setting</h2>
+        <button onclick="checkAutoRecord()">Check Auto-Record</button>
+        <button onclick="enableAutoRecord()">Enable Auto-Record</button>
+        <button onclick="disableAutoRecord()">Disable Auto-Record</button>
+        <div id="autoRecordStatus" class="status"></div>
+    </div>
+
+    <div class="section">
+        <h2>Meeting Detection</h2>
+        <button onclick="checkMeetingStatus()">Check Meeting Status</button>
+        <div id="meetingStatus" class="status"></div>
+    </div>
+
+    <div class="section">
+        <h2>Recording Status</h2>
+        <button onclick="checkRecordingStatus()">Check Recording Status</button>
+        <div id="recordingStatus" class="status"></div>
+    </div>
+
+    <div class="section">
+        <h2>Console Logs</h2>
+        <button onclick="clearLogs()">Clear Logs</button>
+        <div id="logs" style="max-height: 300px; overflow-y: auto;">
+            <pre id="logContent">Logs will appear here...</pre>
+        </div>
+    </div>
+
+    <script>
+        let logMessages = [];
+
+        function log(message, type = 'info') {
+            const timestamp = new Date().toLocaleTimeString();
+            const logLine = `[${timestamp}] ${message}`;
+            logMessages.push(logLine);
+            
+            console.log(message);
+            
+            const logContent = document.getElementById('logContent');
+            logContent.textContent = logMessages.join('\n');
+            logContent.parentElement.scrollTop = logContent.parentElement.scrollHeight;
+        }
+
+        function clearLogs() {
+            logMessages = [];
+            document.getElementById('logContent').textContent = 'Logs cleared...';
+        }
+
+        function checkExtension() {
+            log('Checking extension...');
+            if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.id) {
+                showStatus('extensionStatus', '✓ Extension is loaded', 'success');
+                log('Extension ID: ' + chrome.runtime.id);
+            } else {
+                showStatus('extensionStatus', '✗ Extension not detected', 'error');
+                log('ERROR: Extension not loaded');
+            }
+        }
+
+        function checkAutoRecord() {
+            log('Checking auto-record setting...');
+            chrome.storage.local.get(['autoRecord'], (data) => {
+                const isEnabled = data.autoRecord === true;
+                showStatus('autoRecordStatus', 
+                    `Auto-Record: ${isEnabled ? 'ENABLED ✓' : 'DISABLED ✗'}`, 
+                    isEnabled ? 'success' : 'error'
+                );
+                log('Auto-record is: ' + (isEnabled ? 'ENABLED' : 'DISABLED'));
+            });
+        }
+
+        function enableAutoRecord() {
+            log('Enabling auto-record...');
+            chrome.storage.local.set({ autoRecord: true }, () => {
+                showStatus('autoRecordStatus', '✓ Auto-Record ENABLED', 'success');
+                log('Auto-record enabled successfully');
+            });
+        }
+
+        function disableAutoRecord() {
+            log('Disabling auto-record...');
+            chrome.storage.local.set({ autoRecord: false }, () => {
+                showStatus('autoRecordStatus', '✓ Auto-Record DISABLED', 'info');
+                log('Auto-record disabled successfully');
+            });
+        }
+
+        function checkMeetingStatus() {
+            log('Checking meeting status...');
+            chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
+                if (!tab) {
+                    showStatus('meetingStatus', '✗ No active tab', 'error');
+                    return;
+                }
+
+                log('Sending message to tab: ' + tab.id);
+                chrome.tabs.sendMessage(tab.id, { type: 'GET_MEETING_STATUS' }, (response) => {
+                    if (chrome.runtime.lastError) {
+                        showStatus('meetingStatus', '✗ No content script on this page', 'error');
+                        log('ERROR: ' + chrome.runtime.lastError.message);
+                        return;
+                    }
+
+                    if (response) {
+                        const msg = `Platform: ${response.platform || 'none'} | In Meeting: ${response.isInMeeting ? 'YES' : 'NO'}`;
+                        showStatus('meetingStatus', msg, response.isInMeeting ? 'success' : 'info');
+                        log('Meeting status: ' + JSON.stringify(response));
+                    }
+                });
+            });
+        }
+
+        function checkRecordingStatus() {
+            log('Checking recording status...');
+            chrome.runtime.sendMessage({ type: 'GET_RECORDING_STATUS' }, (response) => {
+                if (chrome.runtime.lastError) {
+                    showStatus('recordingStatus', '✗ Could not check status', 'error');
+                    log('ERROR: ' + chrome.runtime.lastError.message);
+                    return;
+                }
+
+                if (response) {
+                    const msg = response.isRecording ? 
+                        `🔴 RECORDING (Tab: ${response.tabId})` : 
+                        '⚪ Not Recording';
+                    showStatus('recordingStatus', msg, response.isRecording ? 'error' : 'info');
+                    log('Recording status: ' + JSON.stringify(response));
+                }
+            });
+        }
+
+        function showStatus(elementId, message, type) {
+            const el = document.getElementById(elementId);
+            el.textContent = message;
+            el.className = 'status ' + type;
+        }
+
+        // Auto-check on load
+        window.onload = () => {
+            log('Debug page loaded');
+            checkExtension();
+            checkAutoRecord();
+        };
+    </script>
+</body>
+</html>
