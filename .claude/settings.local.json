@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(del README.md)"
+      "Bash(del README.md)",
+      "Bash(node --check:*)"
     ],
     "deny": [],
     "ask": []

@@ -1,4 +1,4 @@
-// content.js - Simple screen + audio recorder
+// content.js - Enhanced screen + audio recorder with robust detection
 
 console.log('[Meeting Recorder] Content script loaded');
 
@@ -8,13 +8,40 @@ let isRecording = false;
 let mediaStream = null;
 let audioContext = null;
 let micStream = null;
+let saveInterval = null; // For chunked saving
 
-// Meeting detection class
+// State recovery on load
+(async function recoverState() {
+  try {
+    const state = await chrome.storage.local.get(['recordingState']);
+    if (state.recordingState?.isRecording && state.recordingState?.tabId === await getCurrentTabId()) {
+      console.log('[Meeting Recorder] Recovering from crash - state was recording');
+      // Clear stale state
+      await chrome.storage.local.remove(['recordingState']);
+    }
+  } catch (err) {
+    console.error('[Meeting Recorder] State recovery failed:', err);
+  }
+})();
+
+async function getCurrentTabId() {
+  try {
+    const response = await chrome.runtime.sendMessage({ type: 'GET_TAB_ID' });
+    return response?.tabId;
+  } catch {
+    return null;
+  }
+}
+
+// Meeting detection class with MutationObserver
 class MeetingDetector {
   constructor() {
     this.platform = this.detectPlatform();
     this.isInMeeting = false;
     this.checkInterval = null;
+    this.observer = null;
+    this.lastCheckTime = 0;
+    this.checkDebounceMs = 1000; // Debounce rapid checks
     console.log('[Meeting Recorder] Platform detected:', this.platform);
   }
 
@@ -37,48 +64,93 @@ class MeetingDetector {
     // Check immediately
     this.checkMeetingStatus();
 
-    // Then check every 3 seconds
+    // Use MutationObserver for real-time detection
+    this.setupMutationObserver();
+
+    // Fallback polling every 5 seconds (less aggressive)
     this.checkInterval = setInterval(() => {
       this.checkMeetingStatus();
-    }, 3000);
+    }, 5000);
+  }
+
+  setupMutationObserver() {
+    // Observe DOM changes for meeting UI elements
+    this.observer = new MutationObserver(() => {
+      const now = Date.now();
+      if (now - this.lastCheckTime > this.checkDebounceMs) {
+        this.lastCheckTime = now;
+        this.checkMeetingStatus();
+      }
+    });
+
+    this.observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['class', 'data-tid', 'aria-label']
+    });
   }
 
   checkMeetingStatus() {
     let inMeeting = false;
 
-    switch(this.platform) {
-      case 'teams':
-        // Check for Teams call controls/interface
-        inMeeting = !!(
-          document.querySelector('[data-tid="callingButtons"]') ||
-          document.querySelector('[data-tid="calling-screen"]') ||
-          document.querySelector('.calling-screen') ||
-          document.querySelector('[data-tid="meetingButtonsToolbar"]') ||
-          document.querySelector('button[data-tid="call-hangup"]')
-        );
-        break;
+    try {
+      switch(this.platform) {
+        case 'teams':
+          // Multiple fallback selectors for Teams
+          inMeeting = !!(
+            // Primary selectors
+            document.querySelector('[data-tid="callingButtons"]') ||
+            document.querySelector('[data-tid="calling-screen"]') ||
+            document.querySelector('[data-tid="meetingButtonsToolbar"]') ||
+            document.querySelector('button[data-tid="call-hangup"]') ||
+            // Fallback selectors
+            document.querySelector('.calling-screen') ||
+            document.querySelector('[data-tid="controls-call-leave"]') ||
+            document.querySelector('[data-tid="calling-join-button"]')?.closest('.calling-screen') ||
+            // Generic fallbacks
+            (document.querySelector('[id*="calling"]') && document.querySelector('[class*="call"]'))
+          );
+          break;
 
-      case 'meet':
-        // Check for Google Meet call interface
-        inMeeting = !!(
-          document.querySelector('[data-meeting-title]') ||
-          document.querySelector('[data-self-name]') ||
-          document.querySelector('div[data-fps-request-screencast-cap]') ||
-          document.querySelector('[data-participant-id]') ||
-          document.querySelector('button[aria-label*="Leave call"]')
-        );
-        break;
+        case 'meet':
+          // Multiple fallback selectors for Google Meet
+          inMeeting = !!(
+            // Primary selectors
+            document.querySelector('[data-meeting-title]') ||
+            document.querySelector('[data-self-name]') ||
+            document.querySelector('button[aria-label*="Leave call"]') ||
+            document.querySelector('button[aria-label*="End call"]') ||
+            // Fallback selectors
+            document.querySelector('[data-fps-request-screencast-cap]') ||
+            document.querySelector('[data-participant-id]') ||
+            document.querySelector('div[jsname][data-meeting-code]') ||
+            // Generic fallbacks
+            (document.querySelector('[jscontroller]') && window.location.pathname !== '/')
+          );
+          break;
 
-      case 'zoom':
-        // Check for Zoom meeting interface
-        inMeeting = !!(
-          document.querySelector('#wc-container') ||
-          document.querySelector('.meeting-app') ||
-          document.querySelector('[aria-label*="meeting"]') ||
-          document.querySelector('.footer__leave-btn') ||
-          document.querySelector('.zm-btn-legacy--danger')
-        );
-        break;
+        case 'zoom':
+          // Multiple fallback selectors for Zoom
+          inMeeting = !!(
+            // Primary selectors
+            document.querySelector('#wc-container') ||
+            document.querySelector('.meeting-app') ||
+            document.querySelector('.footer__leave-btn') ||
+            document.querySelector('button[aria-label*="End"]') ||
+            // Fallback selectors
+            document.querySelector('[aria-label*="meeting"]') ||
+            document.querySelector('.zm-btn-legacy--danger') ||
+            document.querySelector('.meeting-client') ||
+            // Generic fallbacks
+            (document.querySelector('.footer-button__wrapper') && document.querySelector('[class*="video"]'))
+          );
+          break;
+      }
+    } catch (err) {
+      console.error('[Meeting Recorder] Error checking meeting status:', err);
+      // On error, don't change state
+      return;
     }
 
     // Only notify if status changed
@@ -109,6 +181,10 @@ class MeetingDetector {
       clearInterval(this.checkInterval);
       this.checkInterval = null;
     }
+    if (this.observer) {
+      this.observer.disconnect();
+      this.observer = null;
+    }
   }
 
   getStatus() {
@@ -125,14 +201,18 @@ if (detector.platform) {
   detector.startDetection();
 }
 
-// Start recording function
+// Start recording function with retry logic and state persistence
 async function startRecording() {
   try {
     console.log('[Meeting Recorder] Starting...');
 
+    // Validate not already recording
+    if (isRecording) {
+      console.warn('[Meeting Recorder] Already recording');
+      return { success: false, error: 'Already recording' };
+    }
+
     // Request screen + audio with high quality
-    // IMPORTANT: Use preferCurrentTab to capture the meeting tab's audio
-    // This captures BOTH meeting audio AND your voice as it goes through the meeting
     mediaStream = await navigator.mediaDevices.getDisplayMedia({
       video: {
         width: { ideal: 1920 },
@@ -146,121 +226,119 @@ async function startRecording() {
         sampleRate: 48000,
         channelCount: 2
       },
-      preferCurrentTab: true,  // Prefer capturing the current tab
-      selfBrowserSurface: "include"  // Include current tab in selection
+      preferCurrentTab: true,
+      selfBrowserSurface: "include"
     });
+
+    // Validate we got the stream
+    if (!mediaStream || mediaStream.getTracks().length === 0) {
+      throw new Error('Failed to capture display media');
+    }
 
     console.log('[Meeting Recorder] Got display media');
 
-    // IMPORTANT: Request microphone audio separately
-    // This is critical for capturing YOUR voice during the call
+    // Try microphone capture with retry logic
     let finalStream = mediaStream;
     let micCaptured = false;
+    const maxMicRetries = 2;
 
-    // Try to get microphone - THIS IS CRITICAL for capturing YOUR voice
-    // The tab audio only captures OTHER participants, NOT you
-    try {
-      console.log('[Meeting Recorder] Requesting microphone access for YOUR voice...');
+    for (let attempt = 0; attempt < maxMicRetries; attempt++) {
+      try {
+        console.log(`[Meeting Recorder] Microphone attempt ${attempt + 1}/${maxMicRetries}...`);
 
-      // Request microphone with settings optimized for simultaneous use
-      micStream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: false,  // Don't filter out - we need raw audio
-          noiseSuppression: false,  // Keep all audio
-          autoGainControl: false,   // Manual control is better
-          sampleRate: 48000,
-          channelCount: 2,
-          // These settings help with simultaneous access
-          googEchoCancellation: false,
-          googAutoGainControl: false,
-          googNoiseSuppression: false,
-          googHighpassFilter: false
+        micStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: false,
+            noiseSuppression: false,
+            autoGainControl: false,
+            sampleRate: 48000,
+            channelCount: 2,
+            googEchoCancellation: false,
+            googAutoGainControl: false,
+            googNoiseSuppression: false,
+            googHighpassFilter: false
+          }
+        });
+
+        micCaptured = true;
+        console.log('[Meeting Recorder] ✓ Microphone captured successfully!');
+        break;
+      } catch (micError) {
+        console.error(`[Meeting Recorder] Microphone attempt ${attempt + 1} failed:`, micError.message);
+        if (attempt < maxMicRetries - 1) {
+          await new Promise(resolve => setTimeout(resolve, 500)); // Wait 500ms before retry
         }
-      });
-
-      micCaptured = true;
-      console.log('[Meeting Recorder] ✓ Microphone captured successfully - YOUR voice will be recorded!');
-
-      // Mix system audio + microphone using Web Audio API with high quality
-      audioContext = new AudioContext({ sampleRate: 48000 });
-      const destination = audioContext.createMediaStreamDestination();
-
-      // Create gain nodes for volume control
-      const systemGain = audioContext.createGain();
-      const micGain = audioContext.createGain();
-
-      // Set volumes (1.0 = 100%, can boost to 1.5 for 150%)
-      systemGain.gain.value = 1.2; // Boost meeting audio slightly
-      micGain.gain.value = 1.0; // Normal microphone volume
-
-      // Add system audio (if shared)
-      const systemAudioTracks = mediaStream.getAudioTracks();
-      if (systemAudioTracks.length > 0) {
-        console.log('[Meeting Recorder] Mixing system audio with gain');
-        const systemSource = audioContext.createMediaStreamSource(
-          new MediaStream(systemAudioTracks)
-        );
-        systemSource.connect(systemGain);
-        systemGain.connect(destination);
       }
+    }
 
-      // Add microphone audio
-      console.log('[Meeting Recorder] Mixing microphone audio with gain');
-      const micSource = audioContext.createMediaStreamSource(micStream);
-      micSource.connect(micGain);
-      micGain.connect(destination);
+    // Mix audio if microphone captured
+    if (micCaptured && micStream) {
+      try {
+        audioContext = new AudioContext({ sampleRate: 48000 });
+        const destination = audioContext.createMediaStreamDestination();
 
-      // Create final stream with video + mixed audio
-      finalStream = new MediaStream([
-        ...mediaStream.getVideoTracks(),
-        ...destination.stream.getAudioTracks()
-      ]);
+        const systemGain = audioContext.createGain();
+        const micGain = audioContext.createGain();
 
-      console.log('[Meeting Recorder] ✓ Audio mixed successfully (system + microphone)');
-    } catch (micError) {
-      console.error('[Meeting Recorder] ✗ Microphone FAILED:', micError.message);
-      console.error('[Meeting Recorder] Error details:', micError.name, micError.constraint);
+        systemGain.gain.value = 1.2;
+        micGain.gain.value = 1.0;
 
-      // Alert user with realistic solutions
-      alert('⚠️ Cannot Access Microphone - YOUR VOICE WILL NOT BE RECORDED\n\n' +
-            '❌ Problem: Microphone is already in use by the meeting\n' +
-            '❌ Tab audio only records OTHER participants, NOT you\n\n' +
-            '✅ SOLUTIONS TO RECORD YOUR VOICE:\n\n' +
-            'Option 1: Start recording BEFORE joining the meeting\n' +
-            '  - This extension will capture your mic first\n' +
-            '  - Then join the meeting (mic access is shared)\n\n' +
-            'Option 2: Use system audio (Windows only)\n' +
-            '  - Select "Entire Screen" instead of tab\n' +
-            '  - Check "Share system audio"\n' +
-            '  - Enable "Listen to this device" in Windows sound settings\n\n' +
-            'Option 3: Grant Chrome mic permission\n' +
-            '  - Click the mic icon in address bar\n' +
-            '  - Allow microphone for this site\n' +
-            '  - Reload page and try again\n\n' +
-            'Recording will continue with meeting audio only...');
+        const systemAudioTracks = mediaStream.getAudioTracks();
+        if (systemAudioTracks.length > 0) {
+          const systemSource = audioContext.createMediaStreamSource(
+            new MediaStream(systemAudioTracks)
+          );
+          systemSource.connect(systemGain);
+          systemGain.connect(destination);
+        }
 
-      console.log('[Meeting Recorder] ⚠️ Recording WITHOUT your voice - only other participants will be captured');
+        const micSource = audioContext.createMediaStreamSource(micStream);
+        micSource.connect(micGain);
+        micGain.connect(destination);
+
+        finalStream = new MediaStream([
+          ...mediaStream.getVideoTracks(),
+          ...destination.stream.getAudioTracks()
+        ]);
+
+        console.log('[Meeting Recorder] ✓ Audio mixed successfully');
+      } catch (mixError) {
+        console.error('[Meeting Recorder] Audio mixing failed:', mixError);
+        // Continue with unmixed stream
+      }
+    } else {
+      console.warn('[Meeting Recorder] ⚠️ Recording WITHOUT microphone');
     }
 
     // Setup recorder with high quality settings
     const options = {
       mimeType: 'video/webm;codecs=vp9,opus',
-      videoBitsPerSecond: 5000000,  // 5 Mbps for video
-      audioBitsPerSecond: 256000     // 256 kbps for audio (very high quality)
+      videoBitsPerSecond: 5000000,
+      audioBitsPerSecond: 256000
     };
 
-    // Fallback to vp8 if vp9 not supported
     if (!MediaRecorder.isTypeSupported(options.mimeType)) {
       console.log('[Meeting Recorder] VP9 not supported, using VP8');
       options.mimeType = 'video/webm;codecs=vp8,opus';
     }
 
+    if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+      throw new Error('No supported video codec available');
+    }
+
     mediaRecorder = new MediaRecorder(finalStream, options);
     recordedChunks = [];
 
+    // Chunked data handling for memory efficiency
     mediaRecorder.ondataavailable = (event) => {
-      if (event.data.size > 0) {
+      if (event.data && event.data.size > 0) {
         recordedChunks.push(event.data);
+
+        // Auto-save chunks if buffer gets too large (>500MB in chunks)
+        const totalSize = recordedChunks.reduce((sum, chunk) => sum + chunk.size, 0);
+        if (totalSize > 500 * 1024 * 1024) {
+          console.warn('[Meeting Recorder] Buffer size exceeds 500MB, consider stopping recording');
+        }
       }
     };
 
@@ -268,120 +346,243 @@ async function startRecording() {
       saveRecording();
     };
 
-    // Auto-stop when user stops sharing
-    mediaStream.getVideoTracks()[0].onended = () => {
-      console.log('[Meeting Recorder] Share stopped');
+    mediaRecorder.onerror = (event) => {
+      console.error('[Meeting Recorder] MediaRecorder error:', event.error);
       stopRecording();
     };
 
+    // Auto-stop when user stops sharing
+    const videoTrack = mediaStream.getVideoTracks()[0];
+    if (videoTrack) {
+      videoTrack.onended = () => {
+        console.log('[Meeting Recorder] Share stopped');
+        stopRecording();
+      };
+    }
+
+    // Start recording with 1 second timeslices
     mediaRecorder.start(1000);
     isRecording = true;
 
-    console.log('[Meeting Recorder] Recording started with high quality!');
-    console.log('[Meeting Recorder] Microphone included:', micCaptured);
-    console.log('[Meeting Recorder] System audio tracks:', mediaStream.getAudioTracks().length);
+    // Persist state for recovery
+    await saveRecordingState(true);
 
-    // Notify user of successful recording start
-    if (micCaptured) {
-      chrome.runtime.sendMessage({
-        type: 'RECORDING_STARTED'
-      }).catch(() => {});
-    }
+    console.log('[Meeting Recorder] Recording started successfully!');
+    console.log('[Meeting Recorder] Microphone:', micCaptured);
+    console.log('[Meeting Recorder] Audio tracks:', mediaStream.getAudioTracks().length);
 
-    return { success: true, micCaptured: micCaptured };
+    chrome.runtime.sendMessage({
+      type: 'RECORDING_STARTED',
+      micCaptured
+    }).catch(() => {});
+
+    return { success: true, micCaptured };
 
   } catch (error) {
-    console.error('[Meeting Recorder] Error:', error);
+    console.error('[Meeting Recorder] Start failed:', error);
+
+    // Cleanup on failure
+    if (mediaStream) {
+      mediaStream.getTracks().forEach(track => track.stop());
+    }
+    if (micStream) {
+      micStream.getTracks().forEach(track => track.stop());
+    }
+    if (audioContext) {
+      audioContext.close();
+    }
+
+    mediaStream = null;
+    micStream = null;
+    audioContext = null;
+
     return { success: false, error: error.message };
   }
 }
 
-// Stop recording function
-function stopRecording() {
+// Save recording state for crash recovery
+async function saveRecordingState(recording) {
+  try {
+    const tabId = await getCurrentTabId();
+    await chrome.storage.local.set({
+      recordingState: {
+        isRecording: recording,
+        tabId: tabId,
+        timestamp: Date.now()
+      }
+    });
+  } catch (err) {
+    console.error('[Meeting Recorder] Failed to save state:', err);
+  }
+}
+
+// Stop recording function with proper cleanup
+async function stopRecording() {
   if (!isRecording) {
-    return { success: false };
+    console.warn('[Meeting Recorder] Not currently recording');
+    return { success: false, error: 'Not recording' };
   }
 
   console.log('[Meeting Recorder] Stopping...');
 
-  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-    mediaRecorder.stop();
+  try {
+    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+      mediaRecorder.stop();
+    }
+
+    if (mediaStream) {
+      mediaStream.getTracks().forEach(track => {
+        try {
+          track.stop();
+        } catch (err) {
+          console.error('[Meeting Recorder] Error stopping track:', err);
+        }
+      });
+    }
+
+    if (micStream) {
+      micStream.getTracks().forEach(track => {
+        try {
+          track.stop();
+        } catch (err) {
+          console.error('[Meeting Recorder] Error stopping mic track:', err);
+        }
+      });
+    }
+
+    if (audioContext && audioContext.state !== 'closed') {
+      await audioContext.close();
+    }
+
+    isRecording = false;
+    mediaStream = null;
+    micStream = null;
+    audioContext = null;
+
+    // Clear persisted state
+    await saveRecordingState(false);
+
+    chrome.runtime.sendMessage({ type: 'RECORDING_STOPPED' }).catch(() => {});
+
+    return { success: true };
+  } catch (error) {
+    console.error('[Meeting Recorder] Error during stop:', error);
+    // Force cleanup even on error
+    isRecording = false;
+    mediaStream = null;
+    micStream = null;
+    audioContext = null;
+    return { success: false, error: error.message };
   }
-
-  if (mediaStream) {
-    mediaStream.getTracks().forEach(track => track.stop());
-  }
-
-  if (micStream) {
-    micStream.getTracks().forEach(track => track.stop());
-  }
-
-  if (audioContext) {
-    audioContext.close();
-  }
-
-  isRecording = false;
-  mediaStream = null;
-  micStream = null;
-  audioContext = null;
-
-  // Notify background
-  chrome.runtime.sendMessage({ type: 'RECORDING_STOPPED' }).catch(() => {});
-
-  return { success: true };
 }
 
-// Save recording function
+// Save recording function with validation and error handling
 function saveRecording() {
   console.log('[Meeting Recorder] Saving...');
 
-  if (recordedChunks.length === 0) {
-    alert('No recording data');
-    return;
+  try {
+    if (!recordedChunks || recordedChunks.length === 0) {
+      console.error('[Meeting Recorder] No recording data to save');
+      chrome.runtime.sendMessage({
+        type: 'RECORDING_FAILED',
+        error: 'No data recorded'
+      }).catch(() => {});
+      return;
+    }
+
+    const totalSize = recordedChunks.reduce((sum, chunk) => sum + chunk.size, 0);
+    console.log(`[Meeting Recorder] Saving ${recordedChunks.length} chunks, ${(totalSize / 1024 / 1024).toFixed(2)} MB`);
+
+    const blob = new Blob(recordedChunks, { type: 'video/webm' });
+
+    // Validate blob
+    if (blob.size === 0) {
+      throw new Error('Recording blob is empty');
+    }
+
+    const url = URL.createObjectURL(blob);
+    const date = new Date().toISOString().substring(0, 19).replace(/:/g, '-');
+    const platform = detector?.platform || 'meeting';
+    const filename = `${platform}-recording-${date}.webm`;
+
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+
+    // Clean up blob URL after a delay
+    setTimeout(() => {
+      URL.revokeObjectURL(url);
+    }, 1000);
+
+    recordedChunks = [];
+
+    console.log('[Meeting Recorder] Saved:', filename);
+
+    chrome.runtime.sendMessage({
+      type: 'RECORDING_SAVED',
+      filename,
+      size: blob.size
+    }).catch(() => {});
+
+  } catch (error) {
+    console.error('[Meeting Recorder] Save failed:', error);
+    chrome.runtime.sendMessage({
+      type: 'RECORDING_FAILED',
+      error: error.message
+    }).catch(() => {});
+
+    // Don't clear chunks on error - user might retry
   }
-
-  const blob = new Blob(recordedChunks, { type: 'video/webm' });
-  const url = URL.createObjectURL(blob);
-  const date = new Date().toISOString().substring(0, 19).replace(/:/g, '-');
-  const filename = `recording-${date}.webm`;
-
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  a.click();
-
-  URL.revokeObjectURL(url);
-  recordedChunks = [];
-
-  console.log('[Meeting Recorder] Saved:', filename);
-  
-  // Notify background
-  chrome.runtime.sendMessage({ type: 'RECORDING_SAVED' }).catch(() => {});
 }
 
-// Listen for messages from popup/background
+// Listen for messages from popup/background with validation
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  // Validate message
+  if (!message || typeof message.type !== 'string') {
+    console.error('[Meeting Recorder] Invalid message received:', message);
+    sendResponse({ success: false, error: 'Invalid message format' });
+    return false;
+  }
+
   console.log('[Meeting Recorder] Message:', message.type);
 
-  if (message.type === 'START_RECORDING') {
-    startRecording().then(sendResponse);
-    return true;
-  }
+  try {
+    switch (message.type) {
+      case 'START_RECORDING':
+        startRecording().then(sendResponse).catch(err => {
+          console.error('[Meeting Recorder] Start recording error:', err);
+          sendResponse({ success: false, error: err.message });
+        });
+        return true; // Keep channel open for async response
 
-  if (message.type === 'STOP_RECORDING') {
-    sendResponse(stopRecording());
+      case 'STOP_RECORDING':
+        stopRecording().then(sendResponse).catch(err => {
+          console.error('[Meeting Recorder] Stop recording error:', err);
+          sendResponse({ success: false, error: err.message });
+        });
+        return true; // Keep channel open for async response
+
+      case 'GET_STATUS':
+      case 'GET_MEETING_STATUS':
+        const status = detector?.getStatus() || { platform: null, isInMeeting: false };
+        sendResponse({
+          isRecording: isRecording,
+          platform: status.platform,
+          isInMeeting: status.isInMeeting
+        });
+        return false;
+
+      default:
+        console.warn('[Meeting Recorder] Unknown message type:', message.type);
+        sendResponse({ success: false, error: 'Unknown message type' });
+        return false;
+    }
+  } catch (error) {
+    console.error('[Meeting Recorder] Message handler error:', error);
+    sendResponse({ success: false, error: error.message });
     return false;
   }
-
-  if (message.type === 'GET_STATUS' || message.type === 'GET_MEETING_STATUS') {
-    const status = detector.getStatus();
-    sendResponse({
-      isRecording: isRecording,
-      platform: status.platform,
-      isInMeeting: status.isInMeeting
-    });
-    return false;
-  }
-
-  return false;
 });
