@@ -142,6 +142,31 @@
     </div>
   </div>
 
+  <div class="settings">
+    <label>
+      <input type="checkbox" id="autoUpload">
+      Auto-upload to MeetingMuse
+    </label>
+    <div class="info">
+      Automatically upload recordings to MeetingMuse for AI processing
+    </div>
+    
+    <div id="apiSettings" style="margin-top: 12px; display: none;">
+      <input type="text" id="apiUrl" placeholder="API URL (optional)" 
+             style="width: 100%; padding: 8px; margin-bottom: 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 12px;">
+      <input type="text" id="apiKey" placeholder="API Key (required)" 
+             style="width: 100%; padding: 8px; margin-bottom: 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 12px;">
+      <input type="text" id="userId" placeholder="User ID (optional)" 
+             style="width: 100%; padding: 8px; margin-bottom: 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 12px;">
+      <button id="saveSettings" style="width: 100%; padding: 8px; background: #2196F3; color: white; font-size: 12px;">
+        Save Settings
+      </button>
+      <div class="info" style="margin-top: 8px;">
+        Default: http://localhost:5000/api/external/receive-recording
+      </div>
+    </div>
+  </div>
+
   <script src="popup.js"></script>
 </body>
 </html>

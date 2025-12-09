@@ -27,8 +27,8 @@ startBtn.addEventListener('click', async () => {
     // Validate tab URL is a meeting platform
     const url = tab.url || '';
     const isMeetingPlatform = url.includes('teams.microsoft.com') ||
-                              url.includes('meet.google.com') ||
-                              url.includes('zoom.us');
+      url.includes('meet.google.com') ||
+      url.includes('zoom.us');
 
     if (!isMeetingPlatform) {
       alert('⚠️ Not on a meeting platform!\n\nPlease navigate to:\n• Microsoft Teams\n• Google Meet\n• Zoom\n\nThen try recording again.');
@@ -222,5 +222,104 @@ if (autoRecordCheckbox) {
     } catch (error) {
       console.error('[Meeting Recorder] Failed to save auto-record setting:', error);
     }
+  });
+}
+
+// MeetingMuse Integration Settings
+const autoUploadCheckbox = document.getElementById('autoUpload');
+const apiSettingsDiv = document.getElementById('apiSettings');
+const apiUrlInput = document.getElementById('apiUrl');
+const apiKeyInput = document.getElementById('apiKey');
+const userIdInput = document.getElementById('userId');
+const saveSettingsBtn = document.getElementById('saveSettings');
+
+// Load MeetingMuse settings
+try {
+  chrome.storage.local.get([
+    'autoUpload',
+    'meetingMuseApiUrl',
+    'meetingMuseApiKey',
+    'meetingMuseUserId'
+  ], (data) => {
+    if (chrome.runtime.lastError) {
+      console.error('[Meeting Recorder] Failed to load settings:', chrome.runtime.lastError);
+      return;
+    }
+
+    if (autoUploadCheckbox) {
+      autoUploadCheckbox.checked = data.autoUpload === true;
+      // Show/hide API settings based on checkbox
+      if (apiSettingsDiv) {
+        apiSettingsDiv.style.display = data.autoUpload ? 'block' : 'none';
+      }
+    }
+
+    if (apiUrlInput) apiUrlInput.value = data.meetingMuseApiUrl || '';
+    if (apiKeyInput) apiKeyInput.value = data.meetingMuseApiKey || '';
+    if (userIdInput) userIdInput.value = data.meetingMuseUserId || '';
+  });
+} catch (error) {
+  console.error('[Meeting Recorder] Failed to load MeetingMuse settings:', error);
+}
+
+// Toggle API settings visibility
+if (autoUploadCheckbox && apiSettingsDiv) {
+  autoUploadCheckbox.addEventListener('change', () => {
+    const isEnabled = autoUploadCheckbox.checked;
+    apiSettingsDiv.style.display = isEnabled ? 'block' : 'none';
+
+    // Save auto-upload setting
+    chrome.storage.local.set({ autoUpload: isEnabled }, () => {
+      if (chrome.runtime.lastError) {
+        console.error('[Meeting Recorder] Failed to save auto-upload setting:', chrome.runtime.lastError);
+        return;
+      }
+      console.log('[Meeting Recorder] Auto-upload:', isEnabled);
+
+      if (isEnabled && !apiKeyInput.value) {
+        alert('⚠️ Please configure your API key below to enable auto-upload');
+      }
+    });
+  });
+}
+
+// Save MeetingMuse settings
+if (saveSettingsBtn) {
+  saveSettingsBtn.addEventListener('click', () => {
+    const apiUrl = apiUrlInput?.value.trim() || '';
+    const apiKey = apiKeyInput?.value.trim() || '';
+    const userId = userIdInput?.value.trim() || '';
+
+    if (!apiKey) {
+      alert('❌ API Key is required!\n\nGet your API key from backend/.env\n(API_SECRET_KEY)');
+      return;
+    }
+
+    const settings = {
+      meetingMuseApiUrl: apiUrl,
+      meetingMuseApiKey: apiKey,
+      meetingMuseUserId: userId
+    };
+
+    chrome.storage.local.set(settings, () => {
+      if (chrome.runtime.lastError) {
+        console.error('[Meeting Recorder] Failed to save settings:', chrome.runtime.lastError);
+        alert('❌ Failed to save settings');
+        return;
+      }
+
+      console.log('[Meeting Recorder] MeetingMuse settings saved');
+      alert('✅ Settings saved successfully!\n\nRecordings will now be uploaded to MeetingMuse automatically.');
+
+      // Change button text temporarily
+      const originalText = saveSettingsBtn.textContent;
+      saveSettingsBtn.textContent = '✓ Saved!';
+      saveSettingsBtn.style.background = '#4CAF50';
+
+      setTimeout(() => {
+        saveSettingsBtn.textContent = originalText;
+        saveSettingsBtn.style.background = '#2196F3';
+      }, 2000);
+    });
   });
 }

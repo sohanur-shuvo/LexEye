@@ -95,7 +95,7 @@ class MeetingDetector {
     let inMeeting = false;
 
     try {
-      switch(this.platform) {
+      switch (this.platform) {
         case 'teams':
           // Multiple fallback selectors for Teams
           inMeeting = !!(
@@ -374,7 +374,7 @@ async function startRecording() {
     chrome.runtime.sendMessage({
       type: 'RECORDING_STARTED',
       micCaptured
-    }).catch(() => {});
+    }).catch(() => { });
 
     return { success: true, micCaptured };
 
@@ -462,7 +462,7 @@ async function stopRecording() {
     // Clear persisted state
     await saveRecordingState(false);
 
-    chrome.runtime.sendMessage({ type: 'RECORDING_STOPPED' }).catch(() => {});
+    chrome.runtime.sendMessage({ type: 'RECORDING_STOPPED' }).catch(() => { });
 
     return { success: true };
   } catch (error) {
@@ -476,8 +476,8 @@ async function stopRecording() {
   }
 }
 
-// Save recording function with validation and error handling
-function saveRecording() {
+// Save recording function with API upload to MeetingMuse
+async function saveRecording() {
   console.log('[Meeting Recorder] Saving...');
 
   try {
@@ -486,7 +486,7 @@ function saveRecording() {
       chrome.runtime.sendMessage({
         type: 'RECORDING_FAILED',
         error: 'No data recorded'
-      }).catch(() => {});
+      }).catch(() => { });
       return;
     }
 
@@ -500,11 +500,12 @@ function saveRecording() {
       throw new Error('Recording blob is empty');
     }
 
-    const url = URL.createObjectURL(blob);
     const date = new Date().toISOString().substring(0, 19).replace(/:/g, '-');
     const platform = detector?.platform || 'meeting';
     const filename = `${platform}-recording-${date}.webm`;
 
+    // 1. Save locally as backup (original behavior)
+    const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
     a.download = filename;
@@ -517,25 +518,144 @@ function saveRecording() {
       URL.revokeObjectURL(url);
     }, 1000);
 
-    recordedChunks = [];
+    console.log('[Meeting Recorder] ✓ Saved locally:', filename);
 
-    console.log('[Meeting Recorder] Saved:', filename);
+    // 2. Upload to MeetingMuse backend
+    try {
+      await uploadToMeetingMuse(blob, filename, platform);
+    } catch (uploadError) {
+      console.error('[Meeting Recorder] Upload to MeetingMuse failed:', uploadError);
+      // Don't fail the whole save operation if upload fails
+      chrome.runtime.sendMessage({
+        type: 'UPLOAD_FAILED',
+        error: uploadError.message,
+        filename
+      }).catch(() => { });
+    }
+
+    recordedChunks = [];
 
     chrome.runtime.sendMessage({
       type: 'RECORDING_SAVED',
       filename,
       size: blob.size
-    }).catch(() => {});
+    }).catch(() => { });
 
   } catch (error) {
     console.error('[Meeting Recorder] Save failed:', error);
     chrome.runtime.sendMessage({
       type: 'RECORDING_FAILED',
       error: error.message
-    }).catch(() => {});
+    }).catch(() => { });
 
     // Don't clear chunks on error - user might retry
   }
+}
+
+// Upload recording to MeetingMuse backend
+async function uploadToMeetingMuse(blob, filename, platform) {
+  console.log('[Meeting Recorder] Uploading to MeetingMuse...');
+
+  // Get API configuration from storage
+  const config = await chrome.storage.local.get([
+    'meetingMuseApiUrl',
+    'meetingMuseApiKey',
+    'meetingMuseUserId',
+    'autoUpload'
+  ]);
+
+  // Check if auto-upload is enabled
+  if (config.autoUpload === false) {
+    console.log('[Meeting Recorder] Auto-upload disabled, skipping');
+    return;
+  }
+
+  const apiUrl = config.meetingMuseApiUrl || 'http://localhost:5000/api/external/receive-recording';
+  const apiKey = config.meetingMuseApiKey || '';
+  const userId = config.meetingMuseUserId || '';
+
+  if (!apiKey) {
+    console.warn('[Meeting Recorder] No API key configured, skipping upload');
+    console.log('[Meeting Recorder] Configure in extension settings');
+    return;
+  }
+
+  // Show upload notification
+  chrome.runtime.sendMessage({
+    type: 'UPLOAD_STARTED',
+    filename
+  }).catch(() => { });
+
+  try {
+    // Convert blob to base64
+    const base64Video = await blobToBase64(blob);
+
+    // Prepare API payload
+    const payload = {
+      video: base64Video,
+      fileName: filename,
+      title: `${platform.charAt(0).toUpperCase() + platform.slice(1)} Meeting - ${new Date().toLocaleString()}`,
+      userId: userId,
+      metadata: {
+        platform: platform,
+        recordedAt: new Date().toISOString(),
+        duration: Math.floor((Date.now() - (window.recordingStartTime || Date.now())) / 1000),
+        source: 'lexeye-extension',
+        fileSize: blob.size
+      }
+    };
+
+    // Send to MeetingMuse API
+    const response = await fetch(apiUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}` // Send as Bearer token
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`API error: ${response.status} - ${errorText}`);
+    }
+
+    const result = await response.json();
+    console.log('[Meeting Recorder] ✓ Uploaded to MeetingMuse successfully!', result);
+
+    // Show success notification
+    chrome.runtime.sendMessage({
+      type: 'UPLOAD_SUCCESS',
+      filename,
+      meetingId: result.meetingId || result.id
+    }).catch(() => { });
+
+    chrome.notifications.create({
+      type: 'basic',
+      iconUrl: 'icons/icon48.png',
+      title: 'Uploaded to MeetingMuse',
+      message: `${filename} is being processed by AI`,
+      priority: 2
+    });
+
+  } catch (error) {
+    console.error('[Meeting Recorder] Upload error:', error);
+    throw error;
+  }
+}
+
+// Helper function to convert Blob to base64
+function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      // Remove data URL prefix (data:video/webm;base64,)
+      const base64 = reader.result.split(',')[1];
+      resolve(base64);
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
 }
 
 // Listen for messages from popup/background with validation
