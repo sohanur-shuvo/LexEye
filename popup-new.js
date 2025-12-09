@@ -1,4 +1,4 @@
-// popup-new.js - Enhanced with Firebase Authentication
+// popup-new.js - Enhanced with Firebase Authentication and Google Login Support
 
 // Firebase Configuration (from your frontend/.env)
 const firebaseConfig = {
@@ -23,6 +23,7 @@ const recordingControls = document.getElementById('recordingControls');
 const emailInput = document.getElementById('emailInput');
 const passwordInput = document.getElementById('passwordInput');
 const loginBtn = document.getElementById('loginBtn');
+const googleLoginBtn = document.getElementById('googleLoginBtn');
 const logoutBtn = document.getElementById('logoutBtn');
 const userEmail = document.getElementById('userEmail');
 const loginError = document.getElementById('loginError');
@@ -50,10 +51,14 @@ async function checkAuthState() {
             } else {
                 // Token expired, clear it
                 await chrome.storage.local.remove(['userAuth']);
-                showLoginForm();
+                // Try checking web token
+                await checkForWebToken();
+                if (!currentUser) showLoginForm();
             }
         } else {
-            showLoginForm();
+            // No stored auth, try checking web token
+            await checkForWebToken();
+            if (!currentUser) showLoginForm();
         }
     } catch (error) {
         console.error('[Meeting Recorder] Auth check failed:', error);
@@ -73,7 +78,65 @@ async function verifyToken(token) {
         return response.ok;
     } catch (error) {
         console.error('[Meeting Recorder] Token verification failed:', error);
-        return false;
+        return false; // Fail gracefully
+    }
+}
+
+// Check for token from the web application (localStorage)
+async function checkForWebToken() {
+    try {
+        // Look for MeetingMuse tabs
+        const tabs = await chrome.tabs.query({ url: 'http://localhost:8080/*' });
+
+        if (!tabs || tabs.length === 0) return;
+
+        console.log('[Meeting Recorder] Checking web tabs for session...');
+
+        for (const tab of tabs) {
+            try {
+                // Determine if we can inject script (requires host permissions on localhost)
+                const results = await chrome.scripting.executeScript({
+                    target: { tabId: tab.id },
+                    func: () => {
+                        return {
+                            token: localStorage.getItem('meetingmuse_extension_token'),
+                            email: localStorage.getItem('meetingmuse_user_email'),
+                            uid: localStorage.getItem('meetingmuse_user_uid')
+                        };
+                    }
+                });
+
+                if (results && results[0] && results[0].result && results[0].result.token) {
+                    const data = results[0].result;
+                    console.log('[Meeting Recorder] Found web session!');
+
+                    // Save session
+                    currentUser = {
+                        email: data.email,
+                        token: data.token,
+                        userId: data.uid,
+                        uid: data.uid
+                    };
+
+                    await chrome.storage.local.set({ userAuth: currentUser });
+
+                    // Also store for content script to use
+                    await chrome.storage.local.set({
+                        autoUpload: true,
+                        meetingMuseApiUrl: 'http://localhost:5000/api/external/receive-recording',
+                        meetingMuseApiKey: data.token,
+                        meetingMuseUserId: data.uid
+                    });
+
+                    showLoggedInState();
+                    return;
+                }
+            } catch (e) {
+                console.log('[Meeting Recorder] Could not read from tab', tab.id, e);
+            }
+        }
+    } catch (error) {
+        console.error('[Meeting Recorder] Web token check error:', error);
     }
 }
 
@@ -98,7 +161,7 @@ function showLoginForm() {
     loginSection.classList.remove('logged-in');
 }
 
-// Login with Firebase
+// Login with Firebase (Email/Pass)
 loginBtn.addEventListener('click', async () => {
     const email = emailInput.value.trim();
     const password = passwordInput.value;
@@ -157,6 +220,16 @@ loginBtn.addEventListener('click', async () => {
         loginBtn.textContent = 'Login to MeetingMuse';
     }
 });
+
+// Google Login Handler
+if (googleLoginBtn) {
+    googleLoginBtn.addEventListener('click', () => {
+        // Open the web app login page
+        chrome.tabs.create({ url: 'http://localhost:8080/login' });
+        // We rely on checkForWebToken running next time popup opens
+        window.close();
+    });
+}
 
 // Logout
 logoutBtn.addEventListener('click', async () => {
