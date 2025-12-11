@@ -570,7 +570,7 @@ async function uploadToMeetingMuse(blob, filename, platform) {
     return;
   }
 
-  const apiUrl = config.meetingMuseApiUrl || 'http://localhost:5000/api/external/receive-recording';
+  const apiUrl = config.meetingMuseApiUrl || 'https://meetingmuse-backend.onrender.com/api/external/receive-recording';
   const apiKey = config.meetingMuseApiKey || '';
   const userId = config.meetingMuseUserId || '';
 

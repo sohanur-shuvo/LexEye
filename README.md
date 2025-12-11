@@ -12,6 +12,42 @@ A Chrome browser extension that automatically records online meetings from Micro
 - **Desktop Notifications** - Real-time status updates about recording progress
 - **Local Processing** - All recording happens locally, no data sent to external servers
 - **WebM Output** - Saves recordings directly to your Downloads folder
+- **MeetingMuse Integration** - Optional automatic upload to MeetingMuse for AI-powered transcription and analysis
+
+## MeetingMuse Integration
+
+LexEye now integrates with [MeetingMuse](https://meetingmuse-frontend.onrender.com), providing automatic upload and AI-powered analysis of your recordings.
+
+### Features
+
+- **Automatic Upload** - Recordings are automatically uploaded to your MeetingMuse account
+- **AI Transcription** - Get accurate transcripts with speaker identification
+- **AI Summaries** - Receive concise meeting summaries and action items
+- **Secure Authentication** - Login with your MeetingMuse account (email/password or Google)
+- **Dual Save** - Recordings are saved locally AND uploaded to the cloud
+
+### Setup
+
+1. **Create a MeetingMuse Account**
+   - Visit [https://meetingmuse-frontend.onrender.com](https://meetingmuse-frontend.onrender.com)
+   - Sign up with email or Google
+
+2. **Login in Extension**
+   - Click the LexEye extension icon
+   - Enter your MeetingMuse credentials
+   - Or click "Login with Google" to authenticate via the web app
+
+3. **Start Recording**
+   - Recordings will automatically upload after they finish
+   - View them in your MeetingMuse dashboard
+   - Get AI-powered transcripts and summaries
+
+### Privacy
+
+- Your recordings are encrypted in transit (HTTPS)
+- Stored securely in Firebase Cloud Storage
+- Only you can access your recordings
+- You can disable auto-upload in extension settings
 
 ## Supported Platforms
 
