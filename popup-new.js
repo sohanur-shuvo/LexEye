@@ -69,7 +69,7 @@ async function checkAuthState() {
 async function verifyToken(token) {
     try {
         // Verify token with backend
-        const response = await fetch('http://localhost:5000/api/auth/me', {
+        const response = await fetch('http://192.168.140.36:5000/api/auth/me', {
             headers: {
                 'Authorization': `Bearer ${token}`
             }
@@ -86,7 +86,7 @@ async function verifyToken(token) {
 async function checkForWebToken() {
     try {
         // Look for MeetingMuse tabs
-        const tabs = await chrome.tabs.query({ url: ['https://meetingmuse-frontend.onrender.com/*', 'http://localhost:8080/*', 'http://192.168.140.36:8080/*'] });
+        const tabs = await chrome.tabs.query({ url: ['https://meetingmuse-frontend.onrender.com/*', 'http://192.168.140.36:8080/*'] });
 
         if (!tabs || tabs.length === 0) return;
 
@@ -123,7 +123,7 @@ async function checkForWebToken() {
                     // Also store for content script to use
                     await chrome.storage.local.set({
                         autoUpload: true,
-                        meetingMuseApiUrl: 'http://localhost:5000/api/external/receive-recording',
+                        meetingMuseApiUrl: 'http://192.168.140.36:5000/api/external/receive-recording',
                         meetingMuseApiKey: data.token,
                         meetingMuseUserId: data.uid
                     });
@@ -177,7 +177,7 @@ loginBtn.addEventListener('click', async () => {
 
     try {
         // Login via Firebase Authentication using backend API
-        const response = await fetch('http://localhost:5000/api/auth/login', {
+        const response = await fetch('http://192.168.140.36:5000/api/auth/login', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
@@ -205,7 +205,7 @@ loginBtn.addEventListener('click', async () => {
         // Also store for content script to use
         await chrome.storage.local.set({
             autoUpload: true,
-            meetingMuseApiUrl: 'http://localhost:5000/api/external/receive-recording',
+            meetingMuseApiUrl: 'http://192.168.140.36:5000/api/external/receive-recording',
             meetingMuseApiKey: data.token, // Use Firebase token as API key
             meetingMuseUserId: data.uid
         });
@@ -225,7 +225,7 @@ loginBtn.addEventListener('click', async () => {
 if (googleLoginBtn) {
     googleLoginBtn.addEventListener('click', () => {
         // Open the web app login page
-        chrome.tabs.create({ url: 'http://localhost:8080/login' });
+        chrome.tabs.create({ url: 'http://192.168.140.36:8080/login' });
         // We rely on checkForWebToken running next time popup opens
         window.close();
     });
